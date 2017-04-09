@@ -4,14 +4,14 @@ import (
 	"bufio"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
+	"github.com/ginuerzh/pht"
 	"github.com/golang/glog"
 	"golang.org/x/net/http2"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
-	//"strings"
-	"errors"
 	"time"
 )
 
@@ -46,7 +46,6 @@ func (s *HttpServer) HandleRequest(req *http.Request) {
 
 	valid := false
 	u, p, _ := basicProxyAuth(req.Header.Get("Proxy-Authorization"))
-	glog.V(LINFO).Infoln(u, p)
 	for _, user := range s.Base.Node.Users {
 		username := user.Username()
 		password, _ := user.Password()
@@ -71,7 +70,7 @@ func (s *HttpServer) HandleRequest(req *http.Request) {
 
 	// forward http request
 	lastNode := s.Base.Chain.lastNode
-	if lastNode != nil && (lastNode.Protocol == "http" || lastNode.Protocol == "") {
+	if lastNode != nil && lastNode.Transport == "" && (lastNode.Protocol == "http" || lastNode.Protocol == "") {
 		s.forwardRequest(req)
 		return
 	}
@@ -216,6 +215,7 @@ func (s *Http2Server) HandleRequest(w http.ResponseWriter, req *http.Request) {
 	}
 
 	req.Header.Del("Proxy-Authorization")
+	req.Header.Del("Proxy-Connection")
 
 	c, err := s.Base.Chain.Dial(target)
 	if err != nil {
@@ -243,13 +243,12 @@ func (s *Http2Server) HandleRequest(w http.ResponseWriter, req *http.Request) {
 				return
 			}
 			defer conn.Close()
-
+			glog.V(LINFO).Infof("[http2] %s -> %s : downgrade to HTTP/1.1", req.RemoteAddr, target)
 			s.Base.transport(conn, c)
 			return
 		}
 
 		errc := make(chan error, 2)
-
 		go func() {
 			_, err := io.Copy(c, req.Body)
 			errc <- err
@@ -275,7 +274,7 @@ func (s *Http2Server) HandleRequest(w http.ResponseWriter, req *http.Request) {
 
 	resp, err := http.ReadResponse(bufio.NewReader(c), req)
 	if err != nil {
-		glog.V(LWARNING).Infoln(err)
+		glog.V(LWARNING).Infoln("[http2] %s -> %s : %s", req.RemoteAddr, target, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -289,7 +288,6 @@ func (s *Http2Server) HandleRequest(w http.ResponseWriter, req *http.Request) {
 	if _, err := io.Copy(flushWriter{w}, resp.Body); err != nil {
 		glog.V(LWARNING).Infof("[http2] %s <- %s : %s", req.RemoteAddr, target, err)
 	}
-
 	glog.V(LINFO).Infof("[http2] %s >-< %s", req.RemoteAddr, target)
 }
 
@@ -382,4 +380,31 @@ func (fw flushWriter) Write(p []byte) (n int, err error) {
 		f.Flush()
 	}
 	return
+}
+
+type PureHttpServer struct {
+	Base    *ProxyServer
+	Handler func(net.Conn)
+}
+
+func NewPureHttpServer(base *ProxyServer) *PureHttpServer {
+	return &PureHttpServer{
+		Base: base,
+	}
+}
+
+func (s *PureHttpServer) ListenAndServe() error {
+	server := pht.Server{
+		Addr: s.Base.Node.Addr,
+		Key:  s.Base.Node.Get("key"),
+	}
+	if server.Handler == nil {
+		server.Handler = s.handleConn
+	}
+	return server.ListenAndServe()
+}
+
+func (s *PureHttpServer) handleConn(conn net.Conn) {
+	glog.V(LINFO).Infof("[pht] %s - %s", conn.RemoteAddr(), conn.LocalAddr())
+	s.Base.handleConn(conn)
 }

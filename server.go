@@ -3,14 +3,18 @@ package gost
 import (
 	"bufio"
 	"crypto/tls"
-	"github.com/ginuerzh/gosocks5"
-	"github.com/golang/glog"
-	ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/ginuerzh/gosocks4"
+	"github.com/ginuerzh/gosocks5"
+	"github.com/golang/glog"
+	ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
+	"golang.org/x/crypto/ssh"
 )
 
 type ProxyServer struct {
@@ -22,12 +26,21 @@ type ProxyServer struct {
 	ota       bool
 }
 
-func NewProxyServer(node ProxyNode, chain *ProxyChain, config *tls.Config) *ProxyServer {
+func NewProxyServer(node ProxyNode, chain *ProxyChain) *ProxyServer {
+	certFile, keyFile := node.certFile(), node.keyFile()
+
+	cert, err := LoadCertificate(certFile, keyFile)
+
+	if err != nil {
+		glog.Fatal(err)
+	}
+
+	config := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+
 	if chain == nil {
 		chain = NewProxyChain()
-	}
-	if config == nil {
-		config = &tls.Config{}
 	}
 
 	var cipher *ss.Cipher
@@ -122,6 +135,33 @@ func (s *ProxyServer) Serve() error {
 			ttl = DefaultTTL
 		}
 		return NewShadowUdpServer(s, ttl).ListenAndServe()
+	case "pht": // pure http tunnel
+		return NewPureHttpServer(s).ListenAndServe()
+	case "ssh": // SSH tunnel
+		key := s.Node.Get("key")
+		privateBytes, err := ioutil.ReadFile(key)
+		if err != nil {
+			glog.V(LWARNING).Infoln("[ssh]", err)
+			privateBytes = defaultRawKey
+		}
+		private, err := ssh.ParsePrivateKey(privateBytes)
+		if err != nil {
+			return err
+		}
+		config := ssh.ServerConfig{
+			PasswordCallback: DefaultPasswordCallback(s.Node.Users),
+		}
+		if len(s.Node.Users) == 0 {
+			config.NoClientAuth = true
+		}
+
+		config.AddHostKey(private)
+		s := &SSHServer{
+			Addr:   node.Addr,
+			Base:   s,
+			Config: &config,
+		}
+		return s.ListenAndServe()
 	default:
 		ln, err = net.Listen("tcp", node.Addr)
 	}
@@ -171,29 +211,38 @@ func (s *ProxyServer) handleConn(conn net.Conn) {
 		}
 		NewSocks5Server(conn, s).HandleRequest(req)
 		return
+	case "socks4", "socks4a":
+		req, err := gosocks4.ReadRequest(conn)
+		if err != nil {
+			glog.V(LWARNING).Infoln("[socks4]", err)
+			return
+		}
+		NewSocks4Server(conn, s).HandleRequest(req)
+		return
 	}
 
-	// http or socks5
-	b := make([]byte, MediumBufferSize)
-
-	n, err := io.ReadAtLeast(conn, b, 2)
+	br := bufio.NewReader(conn)
+	b, err := br.Peek(1)
 	if err != nil {
 		glog.V(LWARNING).Infoln(err)
 		return
 	}
 
-	// TODO: use bufio.Reader
-	if b[0] == gosocks5.Ver5 {
-		mn := int(b[1]) // methods count
-		length := 2 + mn
-		if n < length {
-			if _, err := io.ReadFull(conn, b[n:length]); err != nil {
-				glog.V(LWARNING).Infoln("[socks5]", err)
-				return
-			}
+	switch b[0] {
+	case gosocks4.Ver4:
+		req, err := gosocks4.ReadRequest(br)
+		if err != nil {
+			glog.V(LWARNING).Infoln("[socks4]", err)
+			return
 		}
-		// TODO: use gosocks5.ServerConn
-		methods := b[2 : 2+mn]
+		NewSocks4Server(conn, s).HandleRequest(req)
+
+	case gosocks5.Ver5:
+		methods, err := gosocks5.ReadMethods(br)
+		if err != nil {
+			glog.V(LWARNING).Infoln("[socks5]", err)
+			return
+		}
 		method := s.selector.Select(methods...)
 		if _, err := conn.Write([]byte{gosocks5.Ver5, method}); err != nil {
 			glog.V(LWARNING).Infoln("[socks5] select:", err)
@@ -212,15 +261,15 @@ func (s *ProxyServer) handleConn(conn net.Conn) {
 			return
 		}
 		NewSocks5Server(conn, s).HandleRequest(req)
-		return
-	}
 
-	req, err := http.ReadRequest(bufio.NewReader(&reqReader{b: b[:n], r: conn}))
-	if err != nil {
-		glog.V(LWARNING).Infoln("[http]", err)
-		return
+	default: // http
+		req, err := http.ReadRequest(br)
+		if err != nil {
+			glog.V(LWARNING).Infoln("[http]", err)
+			return
+		}
+		NewHttpServer(conn, s).HandleRequest(req)
 	}
-	NewHttpServer(conn, s).HandleRequest(req)
 }
 
 func (_ *ProxyServer) transport(conn1, conn2 net.Conn) (err error) {
@@ -238,23 +287,8 @@ func (_ *ProxyServer) transport(conn1, conn2 net.Conn) (err error) {
 
 	select {
 	case err = <-errc:
-		//glog.V(LWARNING).Infoln("transport exit", err)
+		// glog.V(LWARNING).Infoln("transport exit", err)
 	}
-
-	return
-}
-
-type reqReader struct {
-	b []byte
-	r io.Reader
-}
-
-func (r *reqReader) Read(p []byte) (n int, err error) {
-	if len(r.b) == 0 {
-		return r.r.Read(p)
-	}
-	n = copy(p, r.b)
-	r.b = r.b[n:]
 
 	return
 }

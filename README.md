@@ -9,7 +9,7 @@ gost - GO Simple Tunnel
 ------
 * 可同时监听多端口
 * 可设置转发代理，支持多级转发(代理链)
-* 支持标准HTTP/HTTPS/SOCKS5代理协议
+* 支持标准HTTP/HTTPS/SOCKS4(A)/SOCKS5代理协议
 * SOCKS5代理支持TLS协商加密
 * Tunnel UDP over TCP
 * 支持Shadowsocks协议 (OTA: 2.2+，UDP: 2.4+)
@@ -18,6 +18,7 @@ gost - GO Simple Tunnel
 * 实验性支持QUIC (2.3+)
 * 支持KCP协议 (2.3+)
 * 透明代理 (2.3+)
+* SSH隧道 (2.4+)
 
 二进制文件下载：https://github.com/ginuerzh/gost/releases
 
@@ -45,7 +46,7 @@ $ sudo snap install gost
 ```
 scheme分为两部分: protocol+transport
 
-protocol: 代理协议类型(http, socks5, shadowsocks), transport: 数据传输方式(ws, wss, tls, http2, quic, kcp), 二者可以任意组合，或单独使用:
+protocol: 代理协议类型(http, socks4(a), socks5, shadowsocks), transport: 数据传输方式(ws, wss, tls, http2, quic, kcp, pht), 二者可以任意组合，或单独使用:
 
 > http - HTTP代理: http://:8080
 
@@ -53,11 +54,13 @@ protocol: 代理协议类型(http, socks5, shadowsocks), transport: 数据传输
 
 > http2 - HTTP2代理并向下兼容HTTPS代理: http2://:443
 
-> socks - 标准SOCKS5代理(支持tls协商加密): socks://:1080
+> socks4(a) - 标准SOCKS4(A)代理: socks4://:1080或socks4a://:1080
+
+> socks - 标准SOCKS5代理(支持TLS协商加密): socks://:1080
 
 > socks+wss - SOCKS5代理，使用websocket传输数据: socks+wss://:1080
 
-> tls - HTTPS/SOCKS5代理，使用tls传输数据: tls://:443
+> tls - HTTPS/SOCKS5代理，使用TLS传输数据: tls://:443
 
 > ss - Shadowsocks代理，ss://chacha20:123456@:8338
 
@@ -65,9 +68,13 @@ protocol: 代理协议类型(http, socks5, shadowsocks), transport: 数据传输
 
 > quic - QUIC代理，quic://:6121
 
-> kcp - KCP代理，kcp://:8388或kcp://aes:123456@:8388
+> kcp - KCP通道，kcp://:8388或kcp://aes:123456@:8388
+
+> pht - 普通HTTP通道，pht://:8080
 
 > redirect - 透明代理，redirect://:12345
+
+> ssh - SSH转发隧道，ssh://admin:123456@:2222
 
 #### 端口转发
 
@@ -170,8 +177,7 @@ gost按照-F设置的顺序通过代理链将请求最终转发给a.b.c.d:NNNN�
 ```bash
 gost -L=tcp://:2222/192.168.1.1:22 -F=...
 ```
-将本地TCP端口2222上的数据(通过代理链)转发到192.168.1.1:22上。
-
+将本地TCP端口2222上的数据(通过代理链)转发到192.168.1.1:22上。当代理链末端(最后一个-F参数)为SSH类型时，gost会直接使用SSH的本地端口转发功能。
 #### 本地端口转发(UDP)
 
 ```bash
@@ -187,7 +193,7 @@ gost -L=udp://:5353/192.168.1.1:53?ttl=60 -F=...
 ```bash
 gost -L=rtcp://:2222/192.168.1.1:22 -F=... -F=socks://172.24.10.1:1080
 ```
-将172.24.10.1:2222上的数据(通过代理链)转发到192.168.1.1:22上。
+将172.24.10.1:2222上的数据(通过代理链)转发到192.168.1.1:22上。当代理链末端(最后一个-F参数)为SSH类型时，gost会直接使用SSH的远程端口转发功能。
 
 #### 远程端口转发(UDP)
 

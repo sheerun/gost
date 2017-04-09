@@ -7,7 +7,7 @@ Features
 ------
 * Listening on multiple ports
 * Multi-level forward proxy - proxy chain
-* Standard HTTP/HTTPS/SOCKS5 proxy protocols support
+* Standard HTTP/HTTPS/SOCKS4(A)/SOCKS5 proxy protocols support
 * TLS encryption via negotiation support for SOCKS5 proxy
 * Tunnel UDP over TCP
 * Shadowsocks protocol support (OTA: 2.2+, UDP: 2.4+)
@@ -16,6 +16,7 @@ Features
 * Experimental QUIC support (2.3+)
 * KCP protocol support (2.3+)
 * Transparent proxy (2.3+)
+* SSH tunnel (2.4+)
 
 Binary file download：https://github.com/ginuerzh/gost/releases
 
@@ -45,8 +46,8 @@ Effective for the -L and -F parameters
 ```
 scheme can be divided into two parts: protocol+transport
 
-protocol: proxy protocol types (http, socks5, shadowsocks), 
-transport: data transmission mode (ws, wss, tls, http2, quic, kcp), may be used in any combination or individually:
+protocol: proxy protocol types (http, socks4(a), socks5, shadowsocks), 
+transport: data transmission mode (ws, wss, tls, http2, quic, kcp, pht), may be used in any combination or individually:
 
 > http - standard HTTP proxy: http://:8080
 
@@ -54,11 +55,13 @@ transport: data transmission mode (ws, wss, tls, http2, quic, kcp), may be used 
 
 > http2 - HTTP2 proxy and backwards-compatible with HTTPS proxy: http2://:443
 
+> socks4(a) - standard SOCKS4(A) proxy: socks4://:1080 or socks4a://:1080
+
 > socks - standard SOCKS5 proxy: socks://:1080
 
 > socks+wss - SOCKS5 over websocket: socks+wss://:1080
 
-> tls - HTTPS/SOCKS5 over tls: tls://:443
+> tls - HTTPS/SOCKS5 over TLS: tls://:443
 
 > ss - standard shadowsocks proxy, ss://chacha20:123456@:8338
 
@@ -68,7 +71,11 @@ transport: data transmission mode (ws, wss, tls, http2, quic, kcp), may be used 
 
 > kcp - standard KCP tunnel，kcp://:8388 or kcp://aes:123456@:8388
 
+> pht - plain HTTP tunnel, pht://:8080
+
 > redirect - transparent proxy，redirect://:12345
+
+> ssh - SSH tunnel, ssh://admin:123456@:2222
 
 #### Port forwarding
 
@@ -171,7 +178,7 @@ each forward proxy can be any HTTP/HTTPS/HTTP2/SOCKS5/Shadowsocks type.
 ```bash
 gost -L=tcp://:2222/192.168.1.1:22 -F=...
 ```
-The data on the local TCP port 2222 is forwarded to 192.168.1.1:22 (through the proxy chain).
+The data on the local TCP port 2222 is forwarded to 192.168.1.1:22 (through the proxy chain). If the last node of the chain (the last -F parameter) is a SSH tunnel, then gost will use the local port forwarding function of SSH directly.
 
 #### Local UDP port forwarding
 
@@ -188,7 +195,7 @@ Each forwarding channel has a timeout period. When this time is exceeded and the
 ```bash
 gost -L=rtcp://:2222/192.168.1.1:22 -F=... -F=socks://172.24.10.1:1080
 ```
-The data on 172.24.10.1:2222 is forwarded to 192.168.1.1:22 (through the proxy chain).
+The data on 172.24.10.1:2222 is forwarded to 192.168.1.1:22 (through the proxy chain). If the last node of the chain (the last -F parameter) is a SSH tunnel, then gost will use the remote port forwarding function of SSH directly.
 
 #### Remote UDP port forwarding
 
